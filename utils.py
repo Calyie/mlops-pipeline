@@ -3,9 +3,12 @@ from urllib.parse import urlparse
 from pathlib import Path
 import pandas as pd
 import numpy as np
-from sklearn.ensemble import RandomForestClassifier
+from sklearn.ensemble import RandomForestRegressor, RandomForestClassifier
+from sklearn.linear_model import LinearRegression
 from sklearn.base import is_classifier, is_regressor
-from sklearn.model_selection import train_test_split
+from sklearn.model_selection import train_test_split, GridSearchCV
+from sklearn.naive_bayes import MultinomialNB
+from sklearn.pipeline import Pipeline
 from sklearn.preprocessing import OneHotEncoder, StandardScaler
 from sklearn.compose import ColumnTransformer
 from sklearn.feature_extraction.text import CountVectorizer
@@ -172,14 +175,6 @@ def preprocess_data(df, y_col_name="price", text_cols=None, use_stopwords=True, 
 
 #---------------------------------------------------------------------------------------
 # Implement Model Selection Logic
-import numpy as np
-from sklearn.ensemble import RandomForestRegressor, RandomForestClassifier
-from sklearn.linear_model import LinearRegression
-from sklearn.model_selection import train_test_split, GridSearchCV
-from sklearn.naive_bayes import MultinomialNB
-from sklearn.pipeline import Pipeline
-from skorch import NeuralNetClassifier
-
 def train_model(X_train=None, y_train=None, model_training_alg="random_forest", preprocessor=None, train_loader=None, n_epochs=None, n_classes=None, **model_params):
     print(f"Training a {model_training_alg} model...")
 
