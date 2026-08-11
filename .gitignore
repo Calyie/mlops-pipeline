@@ -5,6 +5,7 @@ __pycache__/
 
 # Training artifacts and downloads
 downloads/
+.ipynb_checkpoints/
 saved_models/
 newdata/
 export/
