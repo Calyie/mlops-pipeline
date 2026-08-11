@@ -4,6 +4,7 @@ from pathlib import Path
 import pandas as pd
 import numpy as np
 from sklearn.ensemble import RandomForestRegressor, RandomForestClassifier
+from sklearn.model_selection import RandomizedSearchCV
 from sklearn.linear_model import LinearRegression
 from sklearn.base import is_classifier, is_regressor
 from sklearn.model_selection import train_test_split, GridSearchCV
@@ -179,7 +180,11 @@ def train_model(X_train=None, y_train=None, model_training_alg="random_forest", 
     print(f"Training a {model_training_alg} model...")
 
     if model_training_alg == "random_forest":
-        model = RandomForestClassifier(n_jobs=-1, **model_params)
+        #model = RandomForestClassifier(n_jobs=-1, class_weight="balanced", **model_params)
+        param_dist = {"n_estimators": [200, 400, 600], "max_depth": [None, 20, 40], "min_samples_leaf": [1, 2, 4], "class_weight": ["balanced", "balanced_subsample"]}
+        search = RandomizedSearchCV(RandomForestClassifier(n_jobs=-1), param_dist,n_iter=15, scoring="f1_macro", cv=3, random_state=1337)
+        search.fit(X_train, y_train)
+        model = search.best_estimator_
     
     elif model_training_alg == "random_forest_regressor":
         # Default parameters if not specified
