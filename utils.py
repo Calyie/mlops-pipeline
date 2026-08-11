@@ -77,7 +77,7 @@ def load_data(file_path, header_names=None, dataset_type="csv", mean=None, std=N
         df = pd.read_csv(file_path, sep=sep, header=header, names=names)
         df = df.drop_duplicates()
         print("Dataset Structure:")
-        print(df.head(5))
+        print(df.describe())
         return df
     
     elif dataset_type == "image":
@@ -282,7 +282,7 @@ def evaluate_model(model, X_val, y_val):
             'conf_matrix': conf_matrix,
             'cls_report': classification_report(y_val, y_pred)
         }
-        sns.heatmap(conf_matrix, annot=True, fmt='d', cmap='Blues')
+        sns.heatmap(conf_matrix, annot=True, fmt='d', cmap='rocket_r')
         plt.title('Confusion Matrix - Evaluation Set')
         plt.xlabel('Predicted')
         plt.ylabel('Actual')
