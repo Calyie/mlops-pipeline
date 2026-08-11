@@ -176,7 +176,7 @@ def preprocess_data(df, y_col_name="price", text_cols=None, use_stopwords=True, 
 
 #---------------------------------------------------------------------------------------
 # Implement Model Selection Logic
-def train_model(X_train=None, y_train=None, model_training_alg="random_forest", preprocessor=None, train_loader=None, n_epochs=None, n_classes=None, **model_params):
+def train_model(X_train=None, y_train=None, model_training_alg="random_forest", preprocessor=None, train_loader=None, n_epochs=None, n_classes=None, n_channels=None, **model_params):
     print(f"Training a {model_training_alg} model...")
 
     if model_training_alg == "random_forest":
@@ -209,7 +209,7 @@ def train_model(X_train=None, y_train=None, model_training_alg="random_forest", 
         return best_model
 
     elif model_training_alg == "cnn":
-        model = ResNetClassifier(n_classes=n_classes, n_channels=3, fine_tune=False).to(DEVICE)
+        model = ResNetClassifier(n_classes=n_classes, n_channels=n_channels, fine_tune=False).to(DEVICE)
         model.train()
         criterion = torch.nn.CrossEntropyLoss()
         optimizer = torch.optim.Adam(model.parameters())
