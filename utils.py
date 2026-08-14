@@ -1,4 +1,5 @@
-import requests, zipfile, io, os, datetime, time, json, splitfolders, joblib
+from utils import *
+import requests, zipfile, io, os, datetime, time, json, splitfolders, joblib, glob
 from urllib.parse import urlparse
 from pathlib import Path
 import pandas as pd
@@ -25,6 +26,7 @@ from torch.utils.data import DataLoader, Subset
 DEVICE = "cuda" if torch.cuda.is_available() else "cpu"
 random_state=1337
 torch.manual_seed(random_state)
+HIDDEN_LAYER_SIZE = 1000
 
 
 #--------------------------------------------------------------------------------
@@ -33,21 +35,21 @@ def fetch_dataset(endpoint, zipped=True):
     # Download Dataset
     if not isinstance(endpoint, str):
         raise TypeError("Endpoint must be a valid string")
-    
+
     result = urlparse(endpoint)
     if result.scheme != "https" or not result.netloc:
         raise ValueError("URL must be a valid HTTPS URL")
-    url = endpoint   
+    url = endpoint
 
     filename = Path(result.path).name
     download_dir = Path("downloads")
     download_dir.mkdir(exist_ok=True)
     download_path = download_dir/filename
-    
+
     response = requests.get(url)
     response.raise_for_status()
     print("Download successful")
-    
+
     if zipped:
     # Extract Dataset
         extract_path = download_dir/Path(filename).stem
@@ -56,7 +58,7 @@ def fetch_dataset(endpoint, zipped=True):
             z.extractall(extract_path)
         print(f"\nDataset successfully extracted to:")
         return extract_path.resolve()
-        
+
     else:
         download_path.write_bytes(response.content)
         print(f"Dataset successfully downloaded to:")
@@ -65,34 +67,34 @@ def fetch_dataset(endpoint, zipped=True):
 
 #--------------------------------------------------------------------------------
 # Load Dataset
-def load_data(file_path, header_names=None, dataset_type="csv", mean=None, std=None, sep=","):
+def load_data(file_path, header_names=None, dataset_type="csv", mean=None, std=None, sep=None):
     dataset_type = dataset_type.lower()
     if dataset_type == "csv":
         if header_names:
             if header_names != "not_available":
-                header = None 
+                header = None
                 names = header_names
             else:
                 header = None
                 names = None
         else:
-            header = 0 
+            header = 0
             names = None
         df = pd.read_csv(file_path, sep=sep, header=header, names=names)
         df = df.drop_duplicates()
         print("Dataset Structure:")
         print(df.describe())
         return df
-    
+
     elif dataset_type == "image":
         DATA_BASE_PATH = file_path
         TARGET_BASE_PATH = "./newdata/"
-        
+
         TRAINING_RATIO = 0.8
         TEST_RATIO = 1 - TRAINING_RATIO
-        
+
         splitfolders.ratio(input=DATA_BASE_PATH, output=TARGET_BASE_PATH, ratio=(TRAINING_RATIO, 0, TEST_RATIO))
-        
+
         # Define preprocessing transforms
         transform = transforms.Compose([transforms.Resize((75, 75)), transforms.ToTensor(), transforms.Normalize(mean=mean, std=std)])
 
@@ -123,11 +125,11 @@ def clean_text(X):
     #return X.fillna("").apply(lambda x: re.sub(r"[^a-z\s$!]", "", x.lower()))
 
 def preprocess_data(df, y_col_name="price", text_cols=None, use_stopwords=True, test_size=0.2, random_state=random_state, mean=None, std=None):
-    
+
     #X = df.drop('price', axis=1)
     X = df.drop(columns=y_col_name)
     y = df[y_col_name]
-    X_train, X_test, y_train, y_test = train_test_split(X, y, test_size=test_size, random_state=random_state)  
+    X_train, X_test, y_train, y_test = train_test_split(X, y, test_size=test_size, random_state=random_state)
 
     # Identify text, categorical and numerical columns automatically
     text_cols = text_cols or []
@@ -135,9 +137,9 @@ def preprocess_data(df, y_col_name="price", text_cols=None, use_stopwords=True, 
     missing_text_cols = [col for col in text_cols if col not in X.columns]
     if missing_text_cols:
         raise ValueError(f"Text columns not found: {missing_text_cols}")
-        
+
     categorical_cols = [col for col in X.select_dtypes(include=['object', 'category']).columns if col not in text_cols]
-    numerical_cols = X.select_dtypes(include=["number"]).columns.tolist() 
+    numerical_cols = X.select_dtypes(include=["number"]).columns.tolist()
 
     # Create preprocessing transformers for both categorical, text and numerical data
     categorical_transformer = OneHotEncoder(handle_unknown='ignore')
@@ -169,8 +171,8 @@ def preprocess_data(df, y_col_name="price", text_cols=None, use_stopwords=True, 
     X_train_set = preprocessor.fit_transform(X_train_set)
     X_val_set = preprocessor.transform(X_val_set)
     X_test_set = preprocessor.transform(X_test)  # Apply learned parameters without fitting
-    
-    
+
+
     return X_train_set, X_val_set, X_test_set, y_train_set, y_val_set, y_test, preprocessor
 
 
@@ -181,17 +183,17 @@ def train_model(X_train=None, y_train=None, model_training_alg="random_forest", 
 
     if model_training_alg == "random_forest":
         #model = RandomForestClassifier(n_jobs=-1, class_weight="balanced", **model_params)
-        param_dist = {"n_estimators": [200, 400, 600], "max_depth": [None, 20, 40], "min_samples_leaf": [1, 2, 4], "class_weight": ["balanced", "balanced_subsample"]}
-        search = RandomizedSearchCV(RandomForestClassifier(n_jobs=-1), param_dist,n_iter=15, scoring="f1_macro", cv=3, random_state=1337)
+        param_dist = {"n_estimators": [200, 300], "max_depth": [20, None], "min_samples_leaf": [1, 2]}
+        search = RandomizedSearchCV(RandomForestClassifier(n_jobs=-1, class_weight="balanced"), param_dist, n_iter=6, scoring="f1_macro", cv=3, random_state=1337)
         search.fit(X_train, y_train)
         model = search.best_estimator_
-    
+
     elif model_training_alg == "random_forest_regressor":
         # Default parameters if not specified
         model_params.setdefault('n_estimators', 100)  # Using a sensible default
         model_params.setdefault('random_state', 1337)  # For reproducibility
-        model_params.setdefault('max_depth', 10)     
-        model_params.setdefault('n_jobs', -1) 
+        model_params.setdefault('max_depth', 10)
+        model_params.setdefault('n_jobs', -1)
         model = RandomForestRegressor(**model_params)
 
     elif model_training_alg == "linear":
@@ -199,9 +201,11 @@ def train_model(X_train=None, y_train=None, model_training_alg="random_forest", 
         model_params.setdefault('random_state', 1337)
 
     elif model_training_alg == "naive_bayes":
-        pipeline = Pipeline([("preprocessor", preprocessor), ("classifier", MultinomialNB())])
-        param_grid = {"classifier__alpha": [0.001, 0.01, 0.1, 0.15, 0.2, 0.25, 0.5, 0.75, 1.0]}
-        grid_search = GridSearchCV(pipeline, param_grid, cv=5, scoring="f1")
+        #pipeline = Pipeline([("preprocessor", preprocessor), ("classifier", MultinomialNB())])
+        #param_grid = {"classifier__alpha": [0.001, 0.01, 0.1, 0.15, 0.2, 0.25, 0.5, 0.75, 1.0]}
+        #grid_search = GridSearchCV(pipeline, param_grid, cv=5, scoring="f1")
+        param_grid = {"alpha": [0.001, 0.01, 0.1, 0.15, 0.2, 0.25, 0.5, 0.75, 1.0]}
+        grid_search = GridSearchCV(MultinomialNB(), param_grid, cv=5, scoring="f1_macro")
         grid_search.fit(X_train, y_train)
         # Extract the best model identified by the grid search
         best_model = grid_search.best_estimator_
@@ -225,31 +229,31 @@ def train_model(X_train=None, y_train=None, model_training_alg="random_forest", 
                 loss = criterion(outputs, labels)
                 loss.backward()
                 optimizer.step()
-                
+
                 _, predicted = outputs.max(1)
                 n_total += labels.size(0)
                 n_correct += predicted.eq(labels).sum().item()
                 running_loss += loss.item()
-            
+
             epoch_loss = running_loss / len(train_loader)
             epoch_duration = int(time.time() * 1000 - checkpoint)
             epoch_accuracy = compute_accuracy(n_correct, n_total)
-            
+
             training_data["accuracy"].append(epoch_accuracy)
             training_data["loss"].append(epoch_loss)
 
             intervals = n_epochs // 4
             if epoch % intervals == 0:
-                print(f"[i] Epoch {epoch+1} of {n_epochs}: Acc: {epoch_accuracy:.2f}% Loss: {epoch_loss:.4f} (Took {epoch_duration} ms).")    
-        
+                print(f"[i] Epoch {epoch+1} of {n_epochs}: Acc: {epoch_accuracy:.2f}% Loss: {epoch_loss:.4f} (Took {epoch_duration} ms).")
+
         return model, training_data
-    
+
     else:
         raise ValueError(f"Unsupported model type: {model_training_alg}")
-    
+
     # Train the model
     model.fit(X_train, y_train)
-    
+
     print("Model training completed!")
     return model
 
@@ -270,7 +274,7 @@ def evaluate_model(model, X_val, y_val):
             'r2': r2_score(y_val, y_pred),
             'mae': mean_absolute_error(y_val, y_pred)
         }
-        
+
     else:
         conf_matrix = confusion_matrix(y_val, y_pred)
         # Calculate metrics
@@ -279,7 +283,7 @@ def evaluate_model(model, X_val, y_val):
             'precision': precision_score(y_val, y_pred, average='weighted'),
             'recall': recall_score(y_val, y_pred, average='weighted'),
             'f1_score': f1_score(y_val, y_pred, average='weighted'),
-            'conf_matrix': conf_matrix,
+            #'conf_matrix': conf_matrix,
             'cls_report': classification_report(y_val, y_pred)
         }
         sns.heatmap(conf_matrix, annot=True, fmt='d', cmap='rocket_r')
@@ -287,7 +291,7 @@ def evaluate_model(model, X_val, y_val):
         plt.xlabel('Predicted')
         plt.ylabel('Actual')
         plt.show()
-    
+
     return metrics, y_pred, prediction_probabilities
 
 # --- Evaluation for Neural Network Models ---
@@ -296,13 +300,13 @@ def compute_accuracy(n_correct, n_total):
 
 def evaluate_nn(model, test_loader):
     model.eval()
-    n_correct, n_total = 0, 0   
+    n_correct, n_total = 0, 0
     with torch.no_grad():
         for data, target in test_loader:
             predicted = predict_with_model(model, data, model_type="neuralnet")
             n_total += target.size(0)
             n_correct += (predicted == target).sum().item()
-    accuracy = compute_accuracy(n_correct, n_total) 
+    accuracy = compute_accuracy(n_correct, n_total)
     print(f"[i] Inference accuracy: {accuracy}%.")
     return accuracy
 
@@ -329,7 +333,7 @@ def predict_with_model(model, X, model_type=None):
 #-------------------------------------------------------------------------------------
 # Model Persistence: Saving and Loading ML Models:
 def save_model(model, preprocessor=None, metadata=None, model_dir="saved_models", model_type=None):
-    
+
     # Create the directory if it doesn't exist
     os.makedirs(model_dir, exist_ok=True)
 
@@ -339,8 +343,8 @@ def save_model(model, preprocessor=None, metadata=None, model_dir="saved_models"
         model_path = os.path.join(model_dir, model_name)
         model_scripted.save(model_path)
         print(f"{model_name} Model saved to {model_dir}")
-        return model_path, model_name 
-    
+        return model_path, model_name
+
     else:
         # Generate a timestamped name if none provided
         timestamp = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
@@ -351,33 +355,33 @@ def save_model(model, preprocessor=None, metadata=None, model_dir="saved_models"
         if preprocessor:
             preprocessor_path = os.path.join(model_dir, f"{model_name}_preprocessor.joblib")
         metadata_path = os.path.join(model_dir, f"{model_name}_metadata.json")
-        
+
         # Save model and preprocessor using joblib
         joblib.dump(model, model_path)
         if preprocessor:
             joblib.dump(preprocessor, preprocessor_path)
-        
+
         # Prepare and save metadata
         if metadata is None:
             metadata = {}
-        
+
         # Enhance metadata with additional information
         metadata["timestamp"] = datetime.datetime.now().isoformat()
         metadata["model_path"] = model_path
         if preprocessor and preprocessor_path:
             metadata["preprocessor_path"] = preprocessor_path
         metadata["model_type"] = model.__class__.__name__
-        
+
         # Save metadata as JSON (human-readable format)
         with open(metadata_path, 'w') as f:
             json.dump(metadata, f, indent=4)
-        
+
         print(f"{model_name} Model saved to {model_path}")
         print(f"Preprocessor saved to {preprocessor_path}")
         print(f"Metadata saved to {metadata_path}")
-        
+
         return model_path, model_name
-        
+
 
 #--------------------------------------------------------------------------------
 # Basic Model Loading Function
@@ -388,13 +392,13 @@ def load_model(model_path, preprocessor_path=None, model_type=None):
         model = torch.jit.load(model_path, map_location=DEVICE)
     else:
         model = joblib.load(model_path)
-    
+
     # Optionally load preprocessor
     preprocessor = None
     if preprocessor_path:
         print(f"Loading preprocessor from {preprocessor_path}")
         preprocessor = joblib.load(preprocessor_path)
-    
+
     return model, preprocessor
 
 
@@ -405,36 +409,43 @@ def load_model_with_metadata(model_dir, model_name, model_type=None):
     if model_type == "neuralnet":
         model_path = os.path.join(model_dir, f"{model_name}.pt")
         model = load_model(model_path, model_type=model_type)
-        
+
     else:
         # Construct file paths based on naming convention
         model_path = os.path.join(model_dir, f"{model_name}.joblib")
         preprocessor_path = os.path.join(model_dir, f"{model_name}_preprocessor.joblib")
         metadata_path = os.path.join(model_dir, f"{model_name}_metadata.json")
-        
+
         # Validate that critical files exist
         if not os.path.exists(model_path):
             raise FileNotFoundError(f"Model file not found: {model_path}")
-        
+
         # Handle missing preprocessor gracefully
         if not os.path.exists(preprocessor_path):
             preprocessor_path = None
             print(f"Warning: Preprocessor file not found")
-        
+
         # Load model and preprocessor using the basic function
         model, preprocessor = load_model(model_path, preprocessor_path)
-        
+
         # Load metadata if available
         metadata = None
         if os.path.exists(metadata_path):
             with open(metadata_path, 'r') as f:
                 metadata = json.load(f)
-        
+
         return model, preprocessor, metadata
 
 
 #--------------------------------------------------------------------------------------
-# Custom functions are placed here:
+# Custom functions and configurations are placed here:
+
+ALG_CLASS_NAMES = {
+    "random_forest": "RandomForestClassifier",
+    "random_forest_regressor": "RandomForestRegressor",
+    "linear": "LinearRegression",
+    "naive_bayes": "MultinomialNB",
+}
 
 # --- KDD Dataset (Network Anomaly Detection) ---
 # Dataset-specific configuration
@@ -468,7 +479,7 @@ class ResNetClassifier(nn.Module):
         if fine_tune:
             for param in self.model.layer4.parameters():
                 param.requires_grad = True
-        
+
         # Replace the last fully connected layer
         num_features = self.model.fc.in_features
         self.model.fc = nn.Sequential(
@@ -477,7 +488,7 @@ class ResNetClassifier(nn.Module):
             nn.Dropout(0.3),
             nn.Linear(HIDDEN_LAYER_SIZE, n_classes)
         )
-        
+
     def forward(self, x):
         return self.model(x)
 
@@ -487,18 +498,18 @@ def load_saved_model(model_name):
     # Later: Load the model and use it
     print("\n--- Loading and Using Model ---")
     loaded_model, loaded_preprocessor, loaded_metadata = load_model_with_metadata(model_dir="saved_models", model_name=model_name)
-    
+
     # Display key metadata to verify what we loaded
     print("\nModel Metadata:")
     for key, value in loaded_metadata.items():
         if key not in ["metrics", "parameters"]:
             print(f"  - {key}: {value}")
-    
+
     # Use the loaded model to make predictions
     print("\nMaking predictions with loaded model...")
     loaded_preds, _ = predict_with_model(loaded_model, X_test)
     loaded_metrics, _, _ = evaluate_model(loaded_model, X_test, y_test)
-    
+
     print("Loaded Model Metrics:")
     for metric_name, metric_value in loaded_metrics.items():
         print(f"  - {metric_name}: {metric_value:.4f}")
@@ -516,15 +527,15 @@ def load_saved_nn_model(model_name):
 #---------------------------------------------------------------------------------------
 def upload_model_result():
     url = "http://localhost:8000/api/upload"
-    
+
     # Path to the model file you want to upload
     model_file_path = "spam_detection_model.joblib"
-    
+
     # Open the file in binary mode and send the POST request
     with open(model_file_path, "rb") as model_file:
         files = {"model": model_file}
         response = requests.post(url, files=files)
-    
+
     # Pretty print the response from the server
     print(json.dumps(response.json(), indent=4))
 
@@ -554,7 +565,7 @@ def plot(data, title, label, xlabel, ylabel):
 
     legend = plt.legend(facecolor=node_black, edgecolor=hacker_grey, fontsize=10)
     plt.setp(legend.get_texts(), color=htb_green)
-    
+
     plt.show()
 
 def plot_training_accuracy(training_data):
