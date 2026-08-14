@@ -245,7 +245,7 @@ def train_model(X_train=None, y_train=None, model_training_alg="random_forest", 
         return model, training_data
     
     else:
-        raise ValueError(f"Unsupported model type: {model_type}")
+        raise ValueError(f"Unsupported model type: {model_training_alg}")
     
     # Train the model
     model.fit(X_train, y_train)
