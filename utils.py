@@ -1,4 +1,3 @@
-from utils import *
 import requests, zipfile, io, os, datetime, time, json, splitfolders, joblib, glob
 from urllib.parse import urlparse
 from pathlib import Path
@@ -6,7 +5,8 @@ import pandas as pd
 import numpy as np
 from sklearn.ensemble import RandomForestRegressor, RandomForestClassifier
 from sklearn.model_selection import RandomizedSearchCV
-from sklearn.linear_model import LinearRegression
+from sklearn.linear_model import LinearRegression, LogisticRegression
+from sklearn.datasets import make_blobs
 from sklearn.base import is_classifier, is_regressor
 from sklearn.model_selection import train_test_split, GridSearchCV
 from sklearn.naive_bayes import MultinomialNB
@@ -14,6 +14,7 @@ from sklearn.pipeline import Pipeline
 from sklearn.preprocessing import OneHotEncoder, StandardScaler
 from sklearn.compose import ColumnTransformer
 from sklearn.feature_extraction.text import CountVectorizer
+from sklearn.metrics import accuracy_score, classification_report, confusion_matrix
 import seaborn as sns
 import matplotlib.pyplot as plt
 from htb_ai_library import use_htb_style, HTB_GREEN, NODE_BLACK, HACKER_GREY
@@ -26,7 +27,9 @@ from torch.utils.data import DataLoader, Subset
 DEVICE = "cuda" if torch.cuda.is_available() else "cpu"
 random_state=1337
 torch.manual_seed(random_state)
-HIDDEN_LAYER_SIZE = 1000
+# Seed for reproducibility
+SEED = 1337
+np.random.seed(SEED)
 
 
 #--------------------------------------------------------------------------------
@@ -67,7 +70,7 @@ def fetch_dataset(endpoint, zipped=True):
 
 #--------------------------------------------------------------------------------
 # Load Dataset
-def load_data(file_path, header_names=None, dataset_type="csv", mean=None, std=None, sep=None):
+def load_data(file_path, header_names=None, dataset_type="csv", mean=None, std=None, sep=None, image_size=None):
     dataset_type = dataset_type.lower()
     if dataset_type == "csv":
         if header_names:
@@ -88,26 +91,34 @@ def load_data(file_path, header_names=None, dataset_type="csv", mean=None, std=N
 
     elif dataset_type == "image":
         DATA_BASE_PATH = file_path
-        TARGET_BASE_PATH = "./newdata/"
+        while True:
+            subdirs = [d for d in DATA_BASE_PATH.iterdir() if d.is_dir()]
+            if len(subdirs) == 1:
+                DATA_BASE_PATH = subdirs[0]
+            else:
+                break
 
+        TARGET_BASE_PATH = "./newdata/"
         TRAINING_RATIO = 0.8
         TEST_RATIO = 1 - TRAINING_RATIO
 
         splitfolders.ratio(input=DATA_BASE_PATH, output=TARGET_BASE_PATH, ratio=(TRAINING_RATIO, 0, TEST_RATIO))
-
-        # Define preprocessing transforms
-        transform = transforms.Compose([transforms.Resize((75, 75)), transforms.ToTensor(), transforms.Normalize(mean=mean, std=std)])
+        transform = transforms.Compose([transforms.Resize((image_size, image_size)), transforms.ToTensor(), transforms.Normalize(mean=mean, std=std)])
 
         # Load training and test datasets
         train_dataset = ImageFolder(root=os.path.join(TARGET_BASE_PATH, "train"), transform=transform)
         test_dataset = ImageFolder(root=os.path.join(TARGET_BASE_PATH, "test"), transform=transform)
-        TRAIN_BATCH_SIZE, TEST_BATCH_SIZE = 1024, 1024
 
+        # Detect channels from an actual loaded/transformed sample (matches what the model will really receive)
+        n_channels = train_dataset[0][0].shape[0]
+        print(f"Detected {n_channels} channel(s) from sample tensor")
+
+        TRAIN_BATCH_SIZE, TEST_BATCH_SIZE = 1024, 1024
         # Create data loaders
         train_loader = DataLoader(train_dataset, batch_size=TRAIN_BATCH_SIZE, shuffle=True, num_workers=2)
         test_loader = DataLoader(test_dataset,batch_size=TEST_BATCH_SIZE,shuffle=False,num_workers=2)
         n_classes = len(train_dataset.classes)
-        return train_loader, test_loader, n_classes
+        return train_loader, test_loader, n_classes, n_channels
 
 
 #--------------------------------------------------------------------------------
@@ -199,6 +210,10 @@ def train_model(X_train=None, y_train=None, model_training_alg="random_forest", 
     elif model_training_alg == "linear":
         model = LinearRegression(**model_params)
         model_params.setdefault('random_state', 1337)
+    
+    elif model_training_alg == "logistic_regression":
+        model = LogisticRegression(random_state=SEED)
+        model.fit(X_train, y_train)
 
     elif model_training_alg == "naive_bayes":
         #pipeline = Pipeline([("preprocessor", preprocessor), ("classifier", MultinomialNB())])
@@ -300,13 +315,14 @@ def compute_accuracy(n_correct, n_total):
 
 def evaluate_nn(model, test_loader):
     model.eval()
-    n_correct, n_total = 0, 0
+    n_correct, n_total = 0, 0   
     with torch.no_grad():
         for data, target in test_loader:
+            data, target = data.to(DEVICE), target.to(DEVICE)
             predicted = predict_with_model(model, data, model_type="neuralnet")
             n_total += target.size(0)
             n_correct += (predicted == target).sum().item()
-    accuracy = compute_accuracy(n_correct, n_total)
+    accuracy = compute_accuracy(n_correct, n_total) 
     print(f"[i] Inference accuracy: {accuracy}%.")
     return accuracy
 
@@ -354,6 +370,8 @@ def save_model(model, preprocessor=None, metadata=None, model_dir="saved_models"
         model_path = os.path.join(model_dir, f"{model_name}.joblib")
         if preprocessor:
             preprocessor_path = os.path.join(model_dir, f"{model_name}_preprocessor.joblib")
+        else:
+            preprocessor_path = None
         metadata_path = os.path.join(model_dir, f"{model_name}_metadata.json")
 
         # Save model and preprocessor using joblib
@@ -377,8 +395,10 @@ def save_model(model, preprocessor=None, metadata=None, model_dir="saved_models"
             json.dump(metadata, f, indent=4)
 
         print(f"{model_name} Model saved to {model_path}")
-        print(f"Preprocessor saved to {preprocessor_path}")
-        print(f"Metadata saved to {metadata_path}")
+        if preprocessor_path:
+            print(f"Preprocessor saved to {preprocessor_path}")
+        if metadata_path:
+            print(f"Metadata saved to {metadata_path}")
 
         return model_path, model_name
 
@@ -438,14 +458,7 @@ def load_model_with_metadata(model_dir, model_name, model_type=None):
 
 
 #--------------------------------------------------------------------------------------
-# Custom functions and configurations are placed here:
-
-ALG_CLASS_NAMES = {
-    "random_forest": "RandomForestClassifier",
-    "random_forest_regressor": "RandomForestRegressor",
-    "linear": "LinearRegression",
-    "naive_bayes": "MultinomialNB",
-}
+# Custom functions are placed here:
 
 # --- KDD Dataset (Network Anomaly Detection) ---
 # Dataset-specific configuration
